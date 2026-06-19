@@ -1,0 +1,5 @@
+config LIB_SAM_BLEND
+    bool "Enable the sam BLEnd library"
+    default n
+    help
+        Enable the sam BLEnd library

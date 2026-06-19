@@ -1,0 +1,4 @@
+name: sam-blend
+build:
+  cmake: .
+  kconfig: Kconfig
