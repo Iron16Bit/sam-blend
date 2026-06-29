@@ -39,6 +39,7 @@ void sam_blend_loop(void *arg1, void *arg2, void *arg3) {
 
     sam_radioticks_t rt;
     sam_radio_us_to_rt(TIMESLOT_REQUEST_DISTANCE_US + 4000, &rt);
+    uint8_t channel = 37;
 
 	while(1) {
         current_op = 0;
@@ -46,7 +47,12 @@ void sam_blend_loop(void *arg1, void *arg2, void *arg3) {
         // First SCAN
         struct net_buf *buf;
         sam_rx_sched_args_t sa = {.rx_timeout_us = SCAN_DURATION_US,
-                                  .rx_guard_us = 50};
+                                  .rx_guard_us = 50,
+                                  .channel = channel};
+                                  
+        if (++channel > 39) {
+            channel = 37;
+        }
         sam_rx_wait_args_t wa = {};
 
         sam_result_t res;
@@ -77,6 +83,7 @@ void sam_blend_loop(void *arg1, void *arg2, void *arg3) {
 
         sam_tx_sched_args_t tsa = {};
         tsa.tx_buf = buf;
+        tsa.channel = 37;
         core_data->action_context.tx_delay = rt;
         res = sam_core_tx_sched(tsa, &prev_op_id);
         if (!res) {
@@ -96,6 +103,7 @@ void sam_blend_loop(void *arg1, void *arg2, void *arg3) {
 
             sam_tx_sched_args_t sa = {};
             sa.tx_buf = buf;
+            sa.channel = 37;
             core_data->action_context.tx_delay = rt;
 
             res = sam_core_tx_sched(sa, &next_op_id);
@@ -119,8 +127,6 @@ void sam_blend_loop(void *arg1, void *arg2, void *arg3) {
         while (log_process()) {}
 
         // Reset the epoch
-        sami_log_flush(SAM_MODULE_DEFAULT_INSTANCE_GET(logging), 0, NULL);
-
         sami_core_epoch_restart_sched(SAM_MODULE_DEFAULT_INSTANCE_GET(core), EPOCH_DURATION_US);
 		sami_core_epoch_restart_wait(SAM_MODULE_DEFAULT_INSTANCE_GET(core));
 	}
