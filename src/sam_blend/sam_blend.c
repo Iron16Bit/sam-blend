@@ -116,7 +116,7 @@ void sam_blend_loop(void *arg1, void *arg2, void *arg3) {
             // msg[5] = (uint8_t)NRF_FICR->DEVICEID[0];
             // msg[6] = (uint8_t)NRF_FICR->DEVICEID[1];
 
-            // net_buf_push_mem(buf, &msg, sizeof(msg));
+            // net_buf_add_mem(buf, &msg, sizeof(msg));
 
             net_buf_add_u8(buf, i);
             sam_core_tx_enqueue(buf);
