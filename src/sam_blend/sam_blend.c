@@ -29,13 +29,25 @@ LOG_MODULE_REGISTER(app_blend, CONFIG_LOG_DEFAULT_LEVEL);
 
 #include <hal/nrf_radio.h>
 
+static const uint8_t blend_protocol_id[5] = { 'B', 'L', 'E', 'N', 'D' };
+
 static inline uint16_t blend_node_id(void)
 {
     return (uint16_t)(NRF_FICR->DEVICEID[0] ^
                       NRF_FICR->DEVICEID[1]);
 }
 
-static const uint8_t blend_protocol_id[5] = { 'B', 'L', 'E', 'N', 'D' };
+void create_blend_packet(struct net_buf *buf, uint8_t payload[22]) {
+    net_buf_add_u8(buf, 'B');
+    net_buf_add_u8(buf, 'L');
+    net_buf_add_u8(buf, 'E');
+    net_buf_add_u8(buf, 'N');
+    net_buf_add_u8(buf, 'D');
+    net_buf_add_u8(buf, NRF_FICR->DEVICEID[0]);
+    net_buf_add_u8(buf, NRF_FICR->DEVICEID[1]);
+    for (int i=0; i<22; i++)
+        net_buf_add_u8(buf, payload[i]);
+}
 
 void sam_blend_loop(void *arg1, void *arg2, void *arg3) {
     ARG_UNUSED(arg2);
@@ -57,7 +69,7 @@ void sam_blend_loop(void *arg1, void *arg2, void *arg3) {
 
         // First SCAN
         struct net_buf *buf;
-        sam_rx_sched_args_t sa = {.rx_timeout_us = 0,
+        sam_rx_sched_args_t sa = {.rx_timeout_us = SCAN_DURATION_US,
                                   .rx_guard_us = 0,
                                   .channel = channel + 200};
                                   
@@ -70,8 +82,6 @@ void sam_blend_loop(void *arg1, void *arg2, void *arg3) {
 
         res = sam_core_rx(sa, &wa);
         if (res == SAM_SUCCESS) {
-            LOG_INF("RX len=%u", wa.rx_buf->len);
-
             // Check if it is a BLEND packet
 
             if (wa.rx_buf->len < 5) {
@@ -96,7 +106,7 @@ void sam_blend_loop(void *arg1, void *arg2, void *arg3) {
             LOG_INF("! Unexpected result for the SCAN: %s", sam_get_std_result_name(res));
         }
 
-        for (int i=0; i < BEACONS_PER_EPOCH; i++) {
+        for (int i=0; i < BEACONS_PER_EPOCH_B; i++) {
             int last_op_id;
             // Advertise on channels 37, 38, 39
             res = sam_bufpool_alloc(&buf, K_NO_WAIT);
@@ -105,20 +115,11 @@ void sam_blend_loop(void *arg1, void *arg2, void *arg3) {
             }
 
             // Data payload of BLEnd packet is empty at the moment
-            
-            // uint8_t msg[BLEND_PACKET_LEN];
-            // memset(&msg, 0, BLEND_PACKET_LEN);
-            // msg[0] = (uint8_t)'B';
-            // msg[1] = (uint8_t)'L';
-            // msg[2] = (uint8_t)'E';
-            // msg[3] = (uint8_t)'N';
-            // msg[4] = (uint8_t)'D';
-            // msg[5] = (uint8_t)NRF_FICR->DEVICEID[0];
-            // msg[6] = (uint8_t)NRF_FICR->DEVICEID[1];
 
-            // net_buf_add_mem(buf, &msg, sizeof(msg));
+            uint8_t payload[22];
+            memset(&payload, 0, 22);
+            create_blend_packet(buf, payload);
 
-            net_buf_add_u8(buf, i);
             sam_core_tx_enqueue(buf);
 
             sam_tx_sched_args_t tsa = {};
