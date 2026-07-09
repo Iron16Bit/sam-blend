@@ -13,6 +13,7 @@ LOG_MODULE_REGISTER(app_blend, CONFIG_LOG_DEFAULT_LEVEL);
 #include "zephyr/logging/log.h"
 #include "zephyr/toolchain/gcc.h"
 #include <zephyr/sys/printk.h>
+#include <zephyr/sys/byteorder.h>
 
 #include <sam_nrf52833/sam_radio.h>
 #include <sam_nrf52833/sam_nrf52833_util.h>
@@ -33,9 +34,14 @@ static const uint8_t blend_protocol_id[5] = { 'B', 'L', 'E', 'N', 'D' };
 
 static inline uint16_t blend_node_id(void)
 {
-    return (uint16_t)(NRF_FICR->DEVICEID[0] ^
-                      NRF_FICR->DEVICEID[1]);
+    return (uint16_t)(
+        ((NRF_FICR->DEVICEID[0] & 0xFF)) |
+        ((NRF_FICR->DEVICEID[1] & 0xFF) << 8));
 }
+
+int64_t epoch_end;
+uint16_t next_epoch_start;
+bool schedule_precise_beacon;
 
 void create_blend_packet(struct net_buf *buf, uint8_t payload[22]) {
     net_buf_add_u8(buf, 'B');
@@ -45,6 +51,12 @@ void create_blend_packet(struct net_buf *buf, uint8_t payload[22]) {
     net_buf_add_u8(buf, 'D');
     net_buf_add_u8(buf, NRF_FICR->DEVICEID[0]);
     net_buf_add_u8(buf, NRF_FICR->DEVICEID[1]);
+
+    // Get time until epoch end and store it
+    uint16_t remaining_ms = (uint16_t)(epoch_end - k_uptime_get());
+    net_buf_add_u8(buf, remaining_ms & 0xFF);
+    net_buf_add_u8(buf, remaining_ms >> 8);
+
     for (int i=0; i<22; i++)
         net_buf_add_u8(buf, payload[i]);
 }
@@ -64,8 +76,9 @@ void sam_blend_loop(void *arg1, void *arg2, void *arg3) {
     LOG_INF("Starting BLEnd on node %u", blend_node_id());
 
 	while(1) {
+        schedule_precise_beacon = false;
         /* Start epoch timer */
-        int64_t epoch_end = k_uptime_get() + EPOCH_DURATION_US / 1000;
+        epoch_end = k_uptime_get() + EPOCH_DURATION_US / 1000;
 
         // First SCAN
         struct net_buf *buf;
@@ -96,6 +109,12 @@ void sam_blend_loop(void *arg1, void *arg2, void *arg3) {
                 /* Remove the protocol identifier before passing the packet on */
                 net_buf_pull_mem(wa.rx_buf, 5);
 
+                if (BLEND_VERSION == bblend) {
+                    // Retrieve neighbor's next epoch start
+                    next_epoch_start = sys_get_le16(wa.rx_buf->data);
+                    schedule_precise_beacon;
+                }
+
                 (*cb)(wa.rx_buf);
                 sam_buf_unref(wa.rx_buf);
                 wa.rx_buf = NULL;
@@ -106,16 +125,60 @@ void sam_blend_loop(void *arg1, void *arg2, void *arg3) {
             LOG_INF("! Unexpected result for the SCAN: %s", sam_get_std_result_name(res));
         }
 
-        for (int i=0; i < BEACONS_PER_EPOCH_B; i++) {
-            int last_op_id;
+        if (!schedule_precise_beacon){
+            for (int i=0; i < (BLEND_VERSION == ublend ? BEACONS_PER_EPOCH_U : BEACONS_PER_EPOCH_B); i++) {
+                int last_op_id;
+                // Advertise on channels 37, 38, 39
+                res = sam_bufpool_alloc(&buf, K_NO_WAIT);
+                if (!res || buf == NULL) {
+                    k_oops();
+                }
+
+                // Data payload of BLEnd packet is empty at the moment. Modify it as needed
+                uint8_t payload[22];
+                memset(&payload, 0, 22);
+                create_blend_packet(buf, payload);
+
+                sam_core_tx_enqueue(buf);
+
+                sam_tx_sched_args_t tsa = {};
+                tsa.tx_buf = buf;
+                tsa.channel = ADVERTISE;
+
+                if (i != 0) {
+                    // Random slack
+                    int random_slack_us = (rand() % RANDOM_SLACK_US);
+                    k_sleep(K_USEC(random_slack_us));
+                }
+                res = sam_core_tx_sched(tsa, &last_op_id);
+                if (!res) {
+                    LOG_ERR("! sam_core_tx_sched returned %s", sam_get_std_result_name(res));
+                    k_oops();
+                }
+
+                res = sam_core_tx_wait(last_op_id);
+                sam_buf_unref(buf); // we can unref (the core has now ownership)
+                if (res != SAM_SUCCESS) {
+                    LOG_ERR("Failed TX");
+                }
+                k_sleep(K_USEC(TIMESLOT_REQUEST_DISTANCE_US));
+            }
+
+            /* Wait until the epoch duration has elapsed */
+            int64_t remaining_ms = epoch_end - k_uptime_get();
+            if (remaining_ms > 0) {
+                k_sleep(K_MSEC(remaining_ms));
+            }
+        } else {
+            // Send a single beacon exactly when the neighbor's listen insterval starts
+            int op_id;
             // Advertise on channels 37, 38, 39
             res = sam_bufpool_alloc(&buf, K_NO_WAIT);
             if (!res || buf == NULL) {
                 k_oops();
             }
 
-            // Data payload of BLEnd packet is empty at the moment
-
+            // Data payload of BLEnd packet is empty at the moment. Modify it as needed
             uint8_t payload[22];
             memset(&payload, 0, 22);
             create_blend_packet(buf, payload);
@@ -126,29 +189,19 @@ void sam_blend_loop(void *arg1, void *arg2, void *arg3) {
             tsa.tx_buf = buf;
             tsa.channel = ADVERTISE;
 
-            if (i != 0) {
-                // Random slack
-                int random_slack_us = (rand() % RANDOM_SLACK_US);
-                k_sleep(K_USEC(random_slack_us));
-            }
-            res = sam_core_tx_sched(tsa, &last_op_id);
+            k_sleep(K_MSEC(next_epoch_start));
+
+            res = sam_core_tx_sched(tsa, &op_id);
             if (!res) {
                 LOG_ERR("! sam_core_tx_sched returned %s", sam_get_std_result_name(res));
                 k_oops();
             }
 
-            res = sam_core_tx_wait(last_op_id);
+            res = sam_core_tx_wait(op_id);
             sam_buf_unref(buf); // we can unref (the core has now ownership)
-            k_sleep(K_USEC(TIMESLOT_REQUEST_DISTANCE_US-100));
             if (res != SAM_SUCCESS) {
                 LOG_ERR("Failed TX");
             }
-        }
-
-        /* Wait until the epoch duration has elapsed */
-        int64_t remaining_ms = epoch_end - k_uptime_get();
-        if (remaining_ms > 0) {
-            k_sleep(K_MSEC(remaining_ms));
         }
 
         while (log_process()) {}
