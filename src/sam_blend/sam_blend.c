@@ -61,6 +61,17 @@ void create_blend_packet(struct net_buf *buf, uint8_t payload[22]) {
         net_buf_add_u8(buf, payload[i]);
 }
 
+char* get_blend_version(enum blend_version b) {
+    switch(b) {
+        case ublend:
+            return "U-BLEnd";
+        case fblend:
+            return "F-BLEnd";
+        case bblend:
+            return "B-BLEnd";
+    }
+}
+
 void sam_blend_loop(void *arg1, void *arg2, void *arg3) {
     ARG_UNUSED(arg2);
     ARG_UNUSED(arg3);
@@ -74,11 +85,12 @@ void sam_blend_loop(void *arg1, void *arg2, void *arg3) {
     core_data->action_context.tx_delay = 0;
 
     LOG_INF("Starting BLEnd on node %u", blend_node_id());
+    LOG_INF("Blend version: %s", get_blend_version(BLEND_VERSION));
 
 	while(1) {
         schedule_precise_beacon = false;
         /* Start epoch timer */
-        epoch_end = k_uptime_get() + EPOCH_DURATION_US / 1000;t();
+        epoch_end = k_uptime_get() + EPOCH_DURATION_US / 1000;
 
         // First SCAN
         struct net_buf *buf;
