@@ -78,7 +78,7 @@ void sam_blend_loop(void *arg1, void *arg2, void *arg3) {
 	while(1) {
         schedule_precise_beacon = false;
         /* Start epoch timer */
-        epoch_end = k_uptime_get() + EPOCH_DURATION_US / 1000;
+        epoch_end = k_uptime_get() + EPOCH_DURATION_US / 1000;t();
 
         // First SCAN
         struct net_buf *buf;
@@ -145,9 +145,10 @@ void sam_blend_loop(void *arg1, void *arg2, void *arg3) {
                 tsa.tx_buf = buf;
                 tsa.channel = ADVERTISE;
 
+                int random_slack_us = 0;
                 if (i != 0) {
+                    random_slack_us = (rand() % RANDOM_SLACK_US);
                     // Random slack
-                    int random_slack_us = (rand() % RANDOM_SLACK_US);
                     k_sleep(K_USEC(random_slack_us));
                 }
                 res = sam_core_tx_sched(tsa, &last_op_id);
@@ -161,14 +162,17 @@ void sam_blend_loop(void *arg1, void *arg2, void *arg3) {
                 if (res != SAM_SUCCESS) {
                     LOG_ERR("Failed TX");
                 }
-                k_sleep(K_USEC(TIMESLOT_REQUEST_DISTANCE_US));
+                k_sleep(K_USEC(TIMESLOT_REQUEST_DISTANCE_US - TIMESLOT_LENGTH_US - random_slack_us));
             }
+
+            while (log_process()) {}
 
             /* Wait until the epoch duration has elapsed */
             int64_t remaining_ms = epoch_end - k_uptime_get();
             if (remaining_ms > 0) {
                 k_sleep(K_MSEC(remaining_ms));
             }
+
         } else {
             // Send a single beacon exactly when the neighbor's listen insterval starts
             int op_id;
@@ -202,9 +206,8 @@ void sam_blend_loop(void *arg1, void *arg2, void *arg3) {
             if (res != SAM_SUCCESS) {
                 LOG_ERR("Failed TX");
             }
+            while (log_process()) {}
         }
-
-        while (log_process()) {}
 	}
 }
 
